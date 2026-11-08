@@ -15,6 +15,22 @@ model User {
   name          String
   createdAt     DateTime       @default(now())
   refreshTokens RefreshToken[]
+  announcements Announcement[]
+}
+
+model Announcement {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String
+  price       Float
+  category    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt, id])
+  @@index([userId])
 }
 
 model RefreshToken {

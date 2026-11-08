@@ -4,9 +4,16 @@ JSON API дошки оголошень на Express, TypeScript і PostgreSQL з
 
 Початкові залежності та конфігурація взяті з [бойлерплейта курсу](https://github.com/BetterED-Neoversity/Boilerplate-REST-API-Nodejs).
 
-Потрібні Node.js 24 та PostgreSQL 16 або новіший.
+Потрібні Node.js 24 та PostgreSQL 16 або новіший. Для пошуку кирилицею використовуйте базу з Unicode-локаллю, наприклад ICU `und`, а не `C`.
 
-Скопіюйте `.env.example` у `.env`, вкажіть підключення до PostgreSQL та випадковий `JWT_SECRET` довжиною щонайменше 32 символи. Створіть базу `announcements`, потім виконайте:
+Скопіюйте `.env.example` у `.env`, вкажіть підключення до PostgreSQL та випадковий `JWT_SECRET` довжиною щонайменше 32 символи. Приклад створення бази в PostgreSQL із підтримкою ICU:
+
+```sql
+CREATE DATABASE announcements TEMPLATE template0 ENCODING 'UTF8'
+  LOCALE_PROVIDER icu ICU_LOCALE 'und';
+```
+
+Після створення бази виконайте:
 
 ```sh
 npm ci
@@ -38,6 +45,28 @@ curl -X POST http://localhost:3000/auth/register -H "Content-Type: application/j
 ```
 
 Для роботи із захищеними маршрутами у Swagger UI натисніть **Authorize** та вставте отриманий `accessToken`.
+
+## Оголошення
+
+| Метод  | Маршрут              | Призначення                            |
+| ------ | -------------------- | -------------------------------------- |
+| GET    | `/announcements`     | Публічний список                       |
+| GET    | `/announcements/:id` | Публічний перегляд оголошення          |
+| POST   | `/announcements`     | Створення, потрібен access token       |
+| PATCH  | `/announcements/:id` | Часткове оновлення власного оголошення |
+| DELETE | `/announcements/:id` | Видалення власного оголошення          |
+
+Список приймає `search` (підрядок у назві без урахування регістру), `sort=newest|oldest` і `page` (додатне ціле число). За замовчуванням показує першу сторінку та новіші записи першими. На сторінці 10 записів. Відповідь містить `data` та `pagination` з `total`, `page`, `totalPages`, `perPage`.
+
+Для створення передайте `title` (5–50 символів), `description` (від 10 символів), `price` (число більше нуля) та `category` (`sale`, `service`, `job`, `other`). Автор визначається за токеном. PATCH приймає хоча б одне з цих полів. Спроба змінити або видалити чуже оголошення повертає `403`, відсутнє оголошення — `404`.
+
+```sh
+curl "http://localhost:3000/announcements?search=велосипед&sort=oldest&page=1"
+```
+
+```sh
+curl -X POST http://localhost:3000/announcements -H "Authorization: Bearer <accessToken>" -H "Content-Type: application/json" -d '{"title":"Продам велосипед","description":"Гірський велосипед у доброму стані","price":8000,"category":"sale"}'
+```
 
 ## Розробка та перевірка
 

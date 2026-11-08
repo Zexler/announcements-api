@@ -1,4 +1,5 @@
 import { z } from "../zod.ts";
+import { textSchema } from "./text.ts";
 
 const password = z
   .string()
@@ -8,10 +9,10 @@ const password = z
   });
 
 export const registerSchema = z.object({
-  username: z.string().min(3).max(30),
+  username: textSchema.min(3).max(30).openapi({ example: "olena" }),
   email: z.email(),
   password,
-  name: z.string().min(2),
+  name: textSchema.min(2).openapi({ example: "Олена" }),
 });
 
 export const loginSchema = registerSchema.pick({

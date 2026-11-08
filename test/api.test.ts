@@ -422,29 +422,359 @@ test("невідомий маршрут і пошкоджений JSON пове�
   assert.equal(body.error, "Validation failed");
 });
 
-test("OpenAPI описує маршрути автентифікації та захист", async () => {
+function announcementData() {
+  return {
+    title: "Продам велосипед",
+    description: "Гірський велосипед у доброму стані",
+    price: 8000,
+    category: "sale",
+  };
+}
+
+test("текстові поля з нульовим символом повертають 400", async () => {
+  const input = userData();
+  for (const body of [
+    { ...input, username: "user\u0000name" },
+    { ...input, name: "Олена\u0000" },
+  ]) {
+    assert.equal((await request("/auth/register", "POST", body)).status, 400);
+  }
+  assert.equal(
+    (
+      await request("/auth/login", "POST", {
+        username: "user\u0000name",
+        password: input.password,
+      })
+    ).status,
+    400,
+  );
+  const owner = await registerUser();
+  const created = await request(
+    "/announcements",
+    "POST",
+    announcementData(),
+    owner.accessToken,
+  );
+  for (const body of [
+    { title: "Назва\u0000" },
+    { description: "Опис оголошення\u0000" },
+  ]) {
+    assert.equal(
+      (
+        await request(
+          "/announcements",
+          "POST",
+          { ...announcementData(), ...body },
+          owner.accessToken,
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(
+          `/announcements/${created.body.id}`,
+          "PATCH",
+          body,
+          owner.accessToken,
+        )
+      ).status,
+      400,
+    );
+  }
+  assert.equal((await request("/announcements?search=%00")).status, 400);
+});
+
+test("створення бере автора з токена, а публічний перегляд не розкриває пароль", async () => {
+  const owner = await registerUser();
+  const other = await registerUser();
+  const input = { ...announcementData(), userId: other.user.id };
+  assert.equal((await request("/announcements", "POST", input)).status, 401);
+  const created = await request(
+    "/announcements",
+    "POST",
+    input,
+    owner.accessToken,
+  );
+  assert.equal(created.status, 201);
+  assert.equal(created.body.user.id, owner.user.id);
+  assert.deepEqual(Object.keys(created.body.user).sort(), [
+    "email",
+    "id",
+    "name",
+    "username",
+  ]);
+  const stored = await prisma.announcement.findUniqueOrThrow({
+    where: { id: created.body.id },
+  });
+  assert.equal(stored.userId, owner.user.id);
+  const details = await request(`/announcements/${created.body.id}`);
+  assert.equal(details.status, 200);
+  assert.deepEqual(details.body, created.body);
+  assert.equal((await request("/announcements/2147483647")).status, 404);
+});
+
+test("створення перевіряє всі поля, категорії та числову ціну", async () => {
+  const owner = await registerUser();
+  const input = announcementData();
+  const invalid = [
+    {},
+    { ...input, title: "1234" },
+    { ...input, title: "a".repeat(51) },
+    { ...input, description: "123456789" },
+    { ...input, price: 0 },
+    { ...input, price: -1 },
+    { ...input, price: "100" },
+    { ...input, category: "invalid" },
+    { ...input, price: null },
+  ];
+  for (const body of invalid) {
+    const response = await request(
+      "/announcements",
+      "POST",
+      body,
+      owner.accessToken,
+    );
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.ok(response.body.details);
+  }
+  for (const category of ["sale", "service", "job", "other"]) {
+    const response = await request(
+      "/announcements",
+      "POST",
+      {
+        title: "a".repeat(50),
+        description: "1234567890",
+        price: 0.01,
+        category,
+      },
+      owner.accessToken,
+    );
+    assert.equal(response.status, 201);
+  }
+});
+
+test("власник частково оновлює оголошення, порожні та сторонні поля не проходять", async () => {
+  const owner = await registerUser();
+  const created = await request(
+    "/announcements",
+    "POST",
+    announcementData(),
+    owner.accessToken,
+  );
+  const path = `/announcements/${created.body.id}`;
+  assert.equal((await request(path, "PATCH", { price: 7000 })).status, 401);
+  for (const body of [
+    {},
+    { userId: owner.user.id },
+    { title: "bad" },
+    { price: 0 },
+  ]) {
+    assert.equal(
+      (await request(path, "PATCH", body, owner.accessToken)).status,
+      400,
+    );
+  }
+  const updated = await request(
+    path,
+    "PATCH",
+    { price: 6500 },
+    owner.accessToken,
+  );
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.price, 6500);
+  assert.equal(updated.body.title, created.body.title);
+  assert.equal(updated.body.createdAt, created.body.createdAt);
+  assert.ok(
+    Date.parse(updated.body.updatedAt) > Date.parse(created.body.updatedAt),
+  );
+  assert.equal(
+    (
+      await request(
+        "/announcements/2147483647",
+        "PATCH",
+        { price: 10 },
+        owner.accessToken,
+      )
+    ).status,
+    404,
+  );
+});
+
+test("чуже оголошення не можна змінити або видалити", async () => {
+  const owner = await registerUser();
+  const other = await registerUser();
+  const created = await request(
+    "/announcements",
+    "POST",
+    announcementData(),
+    owner.accessToken,
+  );
+  const path = `/announcements/${created.body.id}`;
+  for (const method of ["PATCH", "DELETE"]) {
+    const response = await request(
+      path,
+      method,
+      method === "PATCH" ? { price: 1 } : undefined,
+      other.accessToken,
+    );
+    assert.equal(response.status, 403);
+    assert.deepEqual(response.body, { error: "Access denied" });
+  }
+  assert.deepEqual((await request(path)).body, created.body);
+  assert.equal((await request(path, "DELETE")).status, 401);
+  const deleted = await request(path, "DELETE", undefined, owner.accessToken);
+  assert.equal(deleted.status, 204);
+  assert.equal(deleted.text, "");
+  assert.equal((await request(path)).status, 404);
+  assert.equal(
+    (await request(path, "DELETE", undefined, owner.accessToken)).status,
+    404,
+  );
+});
+
+test("список має пагінацію, пошук без урахування регістру та стабільне сортування", async () => {
+  const owner = await registerUser();
+  const prefix = `Пошук-${randomUUID().slice(0, 8)}`;
+  await prisma.announcement.createMany({
+    data: Array.from({ length: 23 }, (_, i) => ({
+      ...announcementData(),
+      userId: owner.user.id,
+      title: `${prefix} ${i}`,
+      createdAt: new Date(Date.UTC(2025, 0, 1, 0, 0, i)),
+    })),
+  });
+  const search = encodeURIComponent(prefix.toUpperCase());
+  const first = await request(`/announcements?search=${search}`);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.data.length, 10);
+  assert.deepEqual(first.body.pagination, {
+    total: 23,
+    page: 1,
+    totalPages: 3,
+    perPage: 10,
+  });
+  assert.equal(first.body.data[0].title, `${prefix} 22`);
+  assert.equal(first.body.data[0].user.password, undefined);
+  const second = await request(`/announcements?search=${search}&page=2`);
+  assert.equal(second.body.data.length, 10);
+  assert.equal(second.body.data[0].title, `${prefix} 12`);
+  const third = await request(`/announcements?search=${search}&page=3`);
+  assert.equal(third.body.data.length, 3);
+  const oldest = await request(`/announcements?search=${search}&sort=oldest`);
+  assert.equal(oldest.body.data[0].title, `${prefix} 0`);
+  const outside = await request(`/announcements?search=${search}&page=4`);
+  assert.equal(outside.body.data.length, 0);
+  assert.equal(outside.body.pagination.total, 23);
+  const all = await request("/announcements");
+  const emptySearch = await request("/announcements?search=");
+  assert.deepEqual(emptySearch.body, all.body);
+  assert.equal(all.body.pagination.total, await prisma.announcement.count());
+  const missing = await request(
+    "/announcements?search=not-found-" + randomUUID(),
+  );
+  assert.deepEqual(missing.body.pagination, {
+    total: 0,
+    page: 1,
+    totalPages: 0,
+    perPage: 10,
+  });
+});
+
+test("пошук сприймає символи LIKE як звичайний текст", async () => {
+  const owner = await registerUser();
+  for (const title of ["Знижка 50%_сьогодні", "Знижка 50abcсьогодні"]) {
+    await request(
+      "/announcements",
+      "POST",
+      { ...announcementData(), title },
+      owner.accessToken,
+    );
+  }
+  const result = await request(
+    "/announcements?search=" + encodeURIComponent("50%_"),
+  );
+  assert.equal(result.status, 200);
+  assert.equal(result.body.pagination.total, 1);
+  assert.equal(result.body.data[0].title, "Знижка 50%_сьогодні");
+});
+
+test("невалідні ID та параметри списку повертають 400", async () => {
+  for (const id of ["abc", "0", "-1", "1.5", "2147483648", "1e2"]) {
+    const response = await request(`/announcements/${id}`);
+    assert.equal(response.status, 400, id);
+    assert.ok(response.body.details);
+  }
+  for (const query of [
+    "page=0",
+    "page=-1",
+    "page=1.5",
+    "page=1e2",
+    "page=999999999999999999999",
+    "page=",
+    "page=1&page=2",
+    "sort=unknown",
+    "search=a&search=b",
+  ]) {
+    const response = await request(`/announcements?${query}`);
+    assert.equal(response.status, 400, query);
+    assert.ok(response.body.details);
+  }
+});
+
+test("OpenAPI описує всі маршрути, тіло запитів і захист", async () => {
   const response = await request("/openapi.json");
   assert.equal(response.status, 200);
   const document = response.body;
   assert.equal(document.openapi, "3.0.0");
   assert.equal(document.components.securitySchemes.bearerAuth.scheme, "bearer");
-  for (const [path, method] of [
+  const protectedRoutes = [
     ["/auth/logout", "post"],
     ["/auth/me", "get"],
-  ]) {
+    ["/announcements", "post"],
+    ["/announcements/{id}", "patch"],
+    ["/announcements/{id}", "delete"],
+  ];
+  const publicRoutes = [
+    ["/auth/register", "post"],
+    ["/auth/login", "post"],
+    ["/auth/refresh", "post"],
+    ["/announcements", "get"],
+    ["/announcements/{id}", "get"],
+  ];
+  for (const [path, method] of protectedRoutes) {
     assert.deepEqual(document.paths[path][method].security, [
       { bearerAuth: [] },
     ]);
     assert.ok(document.paths[path][method].responses[401]);
   }
-  for (const path of ["/auth/register", "/auth/login", "/auth/refresh"]) {
-    assert.equal(document.paths[path].post.security, undefined);
+  for (const [path, method] of publicRoutes) {
+    assert.ok(document.paths[path][method]);
+    assert.equal(document.paths[path][method].security, undefined);
+  }
+  for (const path of [
+    "/auth/register",
+    "/auth/login",
+    "/auth/refresh",
+    "/announcements",
+  ]) {
     assert.equal(document.paths[path].post.requestBody.required, true);
   }
   assert.equal(document.components.schemas.User.properties.password, undefined);
   assert.equal(
     document.paths["/auth/logout"].post.responses[204].content,
     undefined,
+  );
+  const page = document.paths["/announcements"].get.parameters.find(
+    (parameter: { name: string }) => parameter.name === "page",
+  );
+  assert.equal(page.schema.type, "integer");
+  assert.equal(page.schema.default, 1);
+  assert.equal(
+    document.paths["/announcements/{id}"].patch.requestBody.content[
+      "application/json"
+    ].schema.minProperties,
+    1,
   );
   const ui = await fetch(baseUrl + "/api-docs/");
   assert.equal(ui.status, 200);

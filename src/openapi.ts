@@ -8,6 +8,12 @@ import {
   loginSchema,
   refreshSchema,
 } from "./validators/auth.validator.ts";
+import {
+  createAnnouncementSchema,
+  updateAnnouncementSchema,
+  announcementParamsSchema,
+  announcementQuerySchema,
+} from "./validators/announcements.validator.ts";
 
 export const registry = new OpenAPIRegistry();
 registry.registerComponent("securitySchemes", "bearerAuth", {
@@ -35,6 +41,16 @@ const profile = registry.register(
   "Profile",
   user.extend({ createdAt: z.iso.datetime() }),
 );
+const announcement = registry.register(
+  "Announcement",
+  createAnnouncementSchema.extend({
+    id: z.number().int().positive(),
+    userId: z.number().int().positive(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+    user,
+  }),
+);
 const error = registry.register("Error", z.object({ error: z.string() }));
 const validationError = registry.register(
   "ValidationError",
@@ -54,6 +70,24 @@ const unauthorized = json(
   "Відсутній, прострочений або невалідний токен",
   error,
 );
+const forbidden = json("Оголошення належить іншому користувачу", error);
+const notFound = json("Оголошення не знайдено", error);
+const params = announcementParamsSchema.extend({
+  id: announcementParamsSchema.shape.id.openapi({
+    type: "integer",
+    minimum: 1,
+    maximum: 2147483647,
+  }),
+});
+const query = announcementQuerySchema.extend({
+  page: announcementQuerySchema.shape.page.openapi({
+    type: "integer",
+    minimum: 1,
+    maximum: 2147483647,
+    default: 1,
+  }),
+});
+
 registry.registerPath({
   method: "post",
   path: "/auth/register",
@@ -125,6 +159,104 @@ registry.registerPath({
   security,
   responses: { 200: json("Профіль користувача", profile), 401: unauthorized },
 });
+registry.registerPath({
+  method: "get",
+  path: "/announcements",
+  tags: ["Оголошення"],
+  summary: "Список оголошень",
+  description:
+    "Пошук підрядка у назві без урахування регістру. По 10 записів на сторінку.",
+  request: { query },
+  responses: {
+    200: json(
+      "Список і пагінація",
+      z.object({
+        data: z.array(announcement),
+        pagination: z.object({
+          total: z.number().int().nonnegative(),
+          page: z.number().int().positive(),
+          totalPages: z.number().int().nonnegative(),
+          perPage: z.literal(10),
+        }),
+      }),
+    ),
+    400: badRequest,
+  },
+});
+registry.registerPath({
+  method: "get",
+  path: "/announcements/{id}",
+  tags: ["Оголошення"],
+  summary: "Перегляд оголошення",
+  request: { params },
+  responses: {
+    200: json("Оголошення з автором", announcement),
+    400: badRequest,
+    404: notFound,
+  },
+});
+registry.registerPath({
+  method: "post",
+  path: "/announcements",
+  tags: ["Оголошення"],
+  summary: "Створення оголошення",
+  security,
+  description: "Автор визначається за access token.",
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: createAnnouncementSchema } },
+    },
+  },
+  responses: {
+    201: json("Оголошення створено", announcement),
+    400: badRequest,
+    401: unauthorized,
+  },
+});
+registry.registerPath({
+  method: "patch",
+  path: "/announcements/{id}",
+  tags: ["Оголошення"],
+  summary: "Оновлення власного оголошення",
+  security,
+  description:
+    "Потрібно передати хоча б одне поле: title, description, price або category.",
+  request: {
+    params,
+    body: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: updateAnnouncementSchema.openapi({ minProperties: 1 }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: json("Оголошення оновлено", announcement),
+    400: badRequest,
+    401: unauthorized,
+    403: forbidden,
+    404: notFound,
+  },
+});
+registry.registerPath({
+  method: "delete",
+  path: "/announcements/{id}",
+  tags: ["Оголошення"],
+  summary: "Видалення власного оголошення",
+  security,
+  request: { params },
+  responses: {
+    204: { description: "Оголошення видалено" },
+    400: badRequest,
+    401: unauthorized,
+    403: forbidden,
+    404: notFound,
+  },
+});
+
 export function generateOpenApiDocument() {
   return new OpenApiGeneratorV3(registry.definitions).generateDocument({
     openapi: "3.0.0",

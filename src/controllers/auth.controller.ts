@@ -2,13 +2,7 @@ import type { RequestHandler } from "express";
 import bcrypt from "bcrypt";
 import prisma from "../../prisma/client.ts";
 import { createTokens, verifyToken } from "../tokens.ts";
-
-export const userFields = {
-  id: true,
-  username: true,
-  email: true,
-  name: true,
-} as const;
+import { userFields } from "../user-fields.ts";
 
 export const register: RequestHandler = async (_req, res) => {
   const { username, email, password, name } = res.locals.body;
