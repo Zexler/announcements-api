@@ -1,6 +1,6 @@
 # REST API дошки оголошень
 
-Навчальний проєкт на Express, TypeScript і PostgreSQL.
+JSON API на Express, TypeScript і PostgreSQL з JWT-автентифікацією.
 
 Початкові залежності та конфігурація взяті з [бойлерплейта курсу](https://github.com/BetterED-Neoversity/Boilerplate-REST-API-Nodejs).
 
@@ -9,3 +9,39 @@
 ```sh
 npm ci
 ```
+
+Скопіюйте `.env.example` у `.env`, вкажіть підключення до PostgreSQL та випадковий `JWT_SECRET` довжиною щонайменше 32 символи. Створіть базу `announcements`, потім виконайте:
+
+```sh
+npm run prisma:generate
+npm run prisma:deploy
+npm start
+```
+
+Сервер працює на порту `3000`. Змінити його можна через `PORT`.
+
+## Автентифікація
+
+| Метод | Маршрут          | Призначення                                         |
+| ----- | ---------------- | --------------------------------------------------- |
+| POST  | `/auth/register` | Реєстрація: `username`, `email`, `password`, `name` |
+| POST  | `/auth/login`    | Вхід: `username`, `password`                        |
+| POST  | `/auth/refresh`  | Оновлення пари токенів: `refreshToken`              |
+| POST  | `/auth/logout`   | Вихід, потрібен access token                        |
+| GET   | `/auth/me`       | Профіль, потрібен access token                      |
+
+Передавайте access token у заголовку `Authorization: Bearer <token>`. Він діє 15 хвилин, refresh token — 7 днів. Повторний вхід замінює попередній refresh token. Після оновлення старий refresh token більше не діє. Вихід видаляє refresh token; виданий access token залишається чинним до закінчення своїх 15 хвилин.
+
+`username` має містити 3–30 символів, `name` — від 2, пароль — від 6 символів і не більше 72 байтів UTF-8 через обмеження bcrypt. `email` має бути валідною адресою. Username та email унікальні.
+
+## Розробка та перевірка
+
+```sh
+npm run dev
+npm run typecheck
+npm test
+```
+
+Для тестів створіть окрему базу `announcements_test` та вкажіть `TEST_DATABASE_URL`. Тести застосовують міграції у власній тимчасовій схемі й видаляють її після завершення. Користувач бази повинен мати право створювати схеми.
+
+Після зміни Prisma schema створіть міграцію командою `npm run prisma:migrate -- --name назва`, потім запустіть `npm run prisma:generate`.
