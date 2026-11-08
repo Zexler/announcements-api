@@ -1,7 +1,18 @@
 import type { ErrorRequestHandler } from "express";
 import logger from "../logger.ts";
+import multer from "multer";
 
 export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) {
+    res
+      .status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400)
+      .json({ error: error.message });
+    return;
+  }
+  if (error?.status === 502 || error?.status === 503) {
+    res.status(error.status).json({ error: error.message });
+    return;
+  }
   if (error?.type === "entity.parse.failed") {
     res.status(400).json({
       error: "Validation failed",

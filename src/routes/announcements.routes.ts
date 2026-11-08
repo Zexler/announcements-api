@@ -8,6 +8,10 @@ import {
 } from "../controllers/announcements.controller.ts";
 import { authenticate } from "../middleware/authenticate.ts";
 import {
+  receiveImage,
+  requireAnnouncementChanges,
+} from "../middleware/upload.ts";
+import {
   validateBody,
   validateParams,
   validateQuery,
@@ -22,12 +26,20 @@ import {
 const router = Router();
 router.get("/", validateQuery(announcementQuerySchema), list);
 router.get("/:id", validateParams(announcementParamsSchema), get);
-router.post("/", authenticate, validateBody(createAnnouncementSchema), create);
+router.post(
+  "/",
+  authenticate,
+  receiveImage,
+  validateBody(createAnnouncementSchema),
+  create,
+);
 router.patch(
   "/:id",
   authenticate,
   validateParams(announcementParamsSchema),
+  receiveImage,
   validateBody(updateAnnouncementSchema),
+  requireAnnouncementChanges,
   update,
 );
 router.delete(

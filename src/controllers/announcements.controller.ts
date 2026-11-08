@@ -3,6 +3,7 @@ import type { Prisma } from "../../generated/prisma/client.ts";
 import prisma from "../../prisma/client.ts";
 import { userFields } from "../user-fields.ts";
 import logger from "../logger.ts";
+import { saveWithImage } from "../announcement-image.ts";
 
 const includeAuthor = { user: { select: userFields } };
 const perPage = 10;
@@ -52,10 +53,12 @@ export const get: RequestHandler = async (_req, res) => {
 };
 
 export const create: RequestHandler = async (req, res) => {
-  const announcement = await prisma.announcement.create({
-    data: { ...res.locals.body, userId: req.user!.sub },
-    include: includeAuthor,
-  });
+  const announcement = await saveWithImage(req, (imageUrl) =>
+    prisma.announcement.create({
+      data: { ...res.locals.body, userId: req.user!.sub, imageUrl },
+      include: includeAuthor,
+    }),
+  );
   logger.info(
     { announcementId: announcement.id, userId: req.user!.sub },
     "Оголошення створено",
@@ -74,11 +77,13 @@ export const update: RequestHandler = async (req, res) => {
     res.status(403).json({ error: "Access denied" });
     return;
   }
-  const updated = await prisma.announcement.update({
-    where: { id, userId: req.user!.sub },
-    data: res.locals.body,
-    include: includeAuthor,
-  });
+  const updated = await saveWithImage(req, (imageUrl) =>
+    prisma.announcement.update({
+      where: { id, userId: req.user!.sub },
+      data: { ...res.locals.body, imageUrl },
+      include: includeAuthor,
+    }),
+  );
   res.json(updated);
 };
 

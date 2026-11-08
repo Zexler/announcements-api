@@ -72,6 +72,16 @@ curl -G --data-urlencode "search=велосипед" --data "sort=oldest" --data
 curl -X POST http://localhost:3000/announcements -H "Authorization: Bearer <accessToken>" -H "Content-Type: application/json" -d '{"title":"Продам велосипед","description":"Гірський велосипед у доброму стані","price":8000,"category":"sale"}'
 ```
 
+## Фото оголошень
+
+Для завантаження фото заповніть `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` та `CLOUDINARY_API_SECRET` у `.env`. Без цих налаштувань можна працювати з оголошеннями без фото.
+
+POST і PATCH приймають `multipart/form-data` з файлом у полі `image`: JPEG, PNG або WebP до 5 МБ. У відповіді `imageUrl` містить URL Cloudinary або `null`. PATCH може змінити лише фото; запит без нового файлу зберігає попереднє фото. Multer тимчасово записує файл у `uploads/`; після обробки запиту локальний файл видаляється.
+
+```sh
+curl -X PATCH http://localhost:3000/announcements/1 -H "Authorization: Bearer <accessToken>" -F "image=@bike.jpg"
+```
+
 ## Розробка та перевірка
 
 ```sh

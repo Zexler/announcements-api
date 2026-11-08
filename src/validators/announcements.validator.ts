@@ -23,8 +23,4 @@ export const createAnnouncementSchema = z.object({
   category: z.enum(["sale", "service", "job", "other"]),
 });
 
-export const updateAnnouncementSchema = createAnnouncementSchema
-  .partial()
-  .refine((value) => Object.keys(value).length > 0, {
-    message: "Provide at least one announcement field",
-  });
+export const updateAnnouncementSchema = createAnnouncementSchema.partial();

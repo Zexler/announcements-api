@@ -4,4 +4,5 @@ generated/
 .env.*
 !.env.example
 coverage/
+uploads/
 *.log

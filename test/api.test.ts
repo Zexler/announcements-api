@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import { v2 as cloudinary, type UploadApiResponse } from "cloudinary";
 import { setTimeout as delay } from "node:timers/promises";
 import { once } from "node:events";
 import type { Server } from "node:http";
@@ -10,6 +12,8 @@ import {
   afterAll as after,
   beforeAll as before,
   beforeEach,
+  afterEach,
+  vi,
   test,
 } from "vitest";
 import bcrypt from "bcrypt";
@@ -25,11 +29,21 @@ process.env.DATABASE_URL = databaseUrl.href;
 process.env.JWT_SECRET = randomUUID() + randomUUID();
 process.env.ALLOWED_ORIGINS = "https://allowed.example";
 process.env.LOG_LEVEL = "silent";
+process.env.CLOUDINARY_CLOUD_NAME = "test";
+process.env.CLOUDINARY_API_KEY = "test";
+process.env.CLOUDINARY_API_SECRET = "test";
 
 const { default: prisma } = await import("../prisma/client.ts");
 const { default: app } = await import("../src/app.ts");
 const { authLimiter } = await import("../src/middleware/auth-limiter.ts");
-beforeEach(() => authLimiter.resetKey("127.0.0.1"));
+beforeEach(() => {
+  authLimiter.resetKey("127.0.0.1");
+  vi.spyOn(cloudinary.uploader, "upload").mockRejectedValue(
+    new Error("Cloudinary unavailable"),
+  );
+  vi.spyOn(cloudinary.uploader, "destroy").mockResolvedValue({ result: "ok" });
+});
+afterEach(() => vi.restoreAllMocks());
 let server: Server;
 let baseUrl: string;
 
@@ -865,4 +879,236 @@ test("OpenAPI описує всі маршрути, тіло запитів і �
   const ui = await fetch(baseUrl + "/api-docs/");
   assert.equal(ui.status, 200);
   assert.match(await ui.text(), /swagger-ui/);
+});
+
+const testImage = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jBugAAAAASUVORK5CYII=",
+  "base64",
+);
+const uploadedImage = {
+  secure_url:
+    "https://res.cloudinary.com/test/image/upload/announcements/test.png",
+  public_id: "announcements/test",
+} as UploadApiResponse;
+
+async function multipartRequest(
+  path: string,
+  method: string,
+  fields: Record<string, string>,
+  token?: string,
+  image: Blob = new Blob([testImage], { type: "image/png" }),
+) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  form.append("image", image, "photo.png");
+  const response = await fetch(baseUrl + path, {
+    method,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  return {
+    status: response.status,
+    body: (await response.json()) as Record<string, any>,
+  };
+}
+
+function multipartFields() {
+  return {
+    title: "Продам велосипед",
+    description: "Велосипед у доброму стані",
+    price: "8000",
+    category: "sale",
+  };
+}
+
+async function expectUploadsUnchanged(files: string[]) {
+  await vi.waitFor(async () =>
+    assert.deepEqual((await readdir("uploads")).sort(), files.sort()),
+  );
+}
+
+test("фото з multipart зберігається в Cloudinary, локальна копія видаляється", async () => {
+  const owner = await registerUser();
+  const files = await readdir("uploads");
+  vi.mocked(cloudinary.uploader.upload).mockImplementationOnce(async (path) => {
+    assert.equal((await stat(path!)).size, testImage.length);
+    return uploadedImage;
+  });
+  const created = await multipartRequest(
+    "/announcements",
+    "POST",
+    multipartFields(),
+    owner.accessToken,
+  );
+  assert.equal(created.status, 201);
+  assert.equal(created.body.price, 8000);
+  assert.equal(created.body.imageUrl, uploadedImage.secure_url);
+  const stored = await prisma.announcement.findUniqueOrThrow({
+    where: { id: created.body.id },
+  });
+  assert.equal(stored.imageUrl, uploadedImage.secure_url);
+  await expectUploadsUnchanged(files);
+  const updated = await request(
+    `/announcements/${stored.id}`,
+    "PATCH",
+    { price: 7000 },
+    owner.accessToken,
+  );
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.imageUrl, stored.imageUrl);
+});
+
+test("PATCH може змінити лише фото і перевіряє власника перед Cloudinary", async () => {
+  const owner = await registerUser();
+  const other = await registerUser();
+  const created = await request(
+    "/announcements",
+    "POST",
+    announcementData(),
+    owner.accessToken,
+  );
+  assert.equal(created.body.imageUrl, null);
+  const files = await readdir("uploads");
+  const path = `/announcements/${created.body.id}`;
+  const denied = await multipartRequest(path, "PATCH", {}, other.accessToken);
+  assert.equal(denied.status, 403);
+  assert.equal(vi.mocked(cloudinary.uploader.upload).mock.calls.length, 0);
+  await expectUploadsUnchanged(files);
+  vi.mocked(cloudinary.uploader.upload).mockResolvedValueOnce(uploadedImage);
+  const updated = await multipartRequest(path, "PATCH", {}, owner.accessToken);
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.imageUrl, uploadedImage.secure_url);
+  assert.equal(updated.body.title, created.body.title);
+  await expectUploadsUnchanged(files);
+});
+
+test("помилки валідації, типу і розміру фото не залишають файлів", async () => {
+  const owner = await registerUser();
+  const files = await readdir("uploads");
+  assert.equal(
+    (await multipartRequest("/announcements", "POST", {}, owner.accessToken))
+      .status,
+    400,
+  );
+  await expectUploadsUnchanged(files);
+  assert.equal(
+    (
+      await multipartRequest(
+        "/announcements",
+        "POST",
+        multipartFields(),
+        owner.accessToken,
+        new Blob(["text"], { type: "text/plain" }),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await multipartRequest(
+        "/announcements",
+        "POST",
+        multipartFields(),
+        owner.accessToken,
+        new Blob([new Uint8Array(5 * 1024 * 1024 + 1)], { type: "image/png" }),
+      )
+    ).status,
+    413,
+  );
+  assert.equal(
+    (await multipartRequest("/announcements", "POST", multipartFields()))
+      .status,
+    401,
+  );
+  assert.equal(vi.mocked(cloudinary.uploader.upload).mock.calls.length, 0);
+  await expectUploadsUnchanged(files);
+});
+
+test("помилка Cloudinary не створює оголошення і прибирає файл", async () => {
+  const owner = await registerUser();
+  const files = await readdir("uploads");
+  const count = await prisma.announcement.count();
+  const response = await multipartRequest(
+    "/announcements",
+    "POST",
+    multipartFields(),
+    owner.accessToken,
+  );
+  assert.equal(response.status, 502);
+  assert.equal(await prisma.announcement.count(), count);
+  await expectUploadsUnchanged(files);
+});
+
+test("помилка запису в БД відкликає щойно завантажене фото", async () => {
+  const owner = await registerUser();
+  const files = await readdir("uploads");
+  vi.mocked(cloudinary.uploader.upload).mockResolvedValueOnce(uploadedImage);
+  vi.spyOn(prisma.announcement, "create").mockRejectedValueOnce(
+    new Error("Database unavailable"),
+  );
+  const response = await multipartRequest(
+    "/announcements",
+    "POST",
+    multipartFields(),
+    owner.accessToken,
+  );
+  assert.equal(response.status, 500);
+  assert.deepEqual(vi.mocked(cloudinary.uploader.destroy).mock.calls, [
+    [uploadedImage.public_id],
+  ]);
+  await expectUploadsUnchanged(files);
+});
+
+test("пошкоджений multipart повертає 400 і не залишає файлів", async () => {
+  const owner = await registerUser();
+  const files = await readdir("uploads");
+  for (const [contentType, body] of [
+    ["multipart/form-data", "broken"],
+    ["multipart/form-data; boundary=broken", "--broken\r\ninvalid"],
+  ]) {
+    const response = await fetch(baseUrl + "/announcements", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.accessToken}`,
+        "Content-Type": contentType,
+      },
+      body,
+    });
+    assert.equal(response.status, 400);
+  }
+  await expectUploadsUnchanged(files);
+});
+
+test("без конфігурації Cloudinary фото повертає 503, JSON працює", async () => {
+  const owner = await registerUser();
+  const files = await readdir("uploads");
+  const old = process.env.CLOUDINARY_API_SECRET;
+  process.env.CLOUDINARY_API_SECRET = "";
+  try {
+    assert.equal(
+      (
+        await multipartRequest(
+          "/announcements",
+          "POST",
+          multipartFields(),
+          owner.accessToken,
+        )
+      ).status,
+      503,
+    );
+    assert.equal(
+      (
+        await request(
+          "/announcements",
+          "POST",
+          announcementData(),
+          owner.accessToken,
+        )
+      ).status,
+      201,
+    );
+  } finally {
+    process.env.CLOUDINARY_API_SECRET = old;
+  }
+  await expectUploadsUnchanged(files);
 });

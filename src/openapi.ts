@@ -48,6 +48,7 @@ const announcement = registry.register(
     userId: z.number().int().positive(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
+    imageUrl: z.url().nullable(),
     user,
   }),
 );
@@ -76,6 +77,19 @@ const unauthorized = json(
 );
 const forbidden = json("Оголошення належить іншому користувачу", error);
 const notFound = json("Оголошення не знайдено", error);
+const imageField = z
+  .string()
+  .openapi({ type: "string", format: "binary" })
+  .optional();
+const imageErrors = {
+  400: json(
+    "Помилка валідації або завантаження файлу",
+    z.union([validationError, error]),
+  ),
+  413: json("Фото перевищує 5 МБ", error),
+  502: json("Помилка завантаження фото", error),
+  503: json("Cloudinary не налаштовано", error),
+};
 const params = announcementParamsSchema.extend({
   id: announcementParamsSchema.shape.id.openapi({
     type: "integer",
@@ -220,12 +234,17 @@ registry.registerPath({
   request: {
     body: {
       required: true,
-      content: { "application/json": { schema: createAnnouncementSchema } },
+      content: {
+        "application/json": { schema: createAnnouncementSchema },
+        "multipart/form-data": {
+          schema: createAnnouncementSchema.extend({ image: imageField }),
+        },
+      },
     },
   },
   responses: {
     201: json("Оголошення створено", announcement),
-    400: badRequest,
+    ...imageErrors,
     401: unauthorized,
   },
 });
@@ -236,7 +255,7 @@ registry.registerPath({
   summary: "Оновлення власного оголошення",
   security,
   description:
-    "Потрібно передати хоча б одне поле: title, description, price або category.",
+    "Потрібно передати хоча б одне поле: title, description, price, category або фото image.",
   request: {
     params,
     body: {
@@ -245,12 +264,17 @@ registry.registerPath({
         "application/json": {
           schema: updateAnnouncementSchema.openapi({ minProperties: 1 }),
         },
+        "multipart/form-data": {
+          schema: updateAnnouncementSchema
+            .extend({ image: imageField })
+            .openapi({ minProperties: 1 }),
+        },
       },
     },
   },
   responses: {
     200: json("Оголошення оновлено", announcement),
-    400: badRequest,
+    ...imageErrors,
     401: unauthorized,
     403: forbidden,
     404: notFound,
