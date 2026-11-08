@@ -1,13 +1,12 @@
 import type { ErrorRequestHandler } from "express";
+import logger from "../logger.ts";
 
 export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   if (error?.type === "entity.parse.failed") {
-    res
-      .status(400)
-      .json({
-        error: "Validation failed",
-        details: { formErrors: ["Invalid JSON"], fieldErrors: {} },
-      });
+    res.status(400).json({
+      error: "Validation failed",
+      details: { formErrors: ["Invalid JSON"], fieldErrors: {} },
+    });
     return;
   }
   if (error?.status >= 400 && error.status < 500) {
@@ -26,6 +25,9 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     res.status(400).json({ error: "Foreign key constraint failed" });
     return;
   }
-  console.error(error);
+  logger.error(
+    { name: error?.name, code: error?.code },
+    "Помилка обробки запиту",
+  );
   res.status(500).json({ error: "Internal server error" });
 };

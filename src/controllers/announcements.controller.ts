@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import type { Prisma } from "../../generated/prisma/client.ts";
 import prisma from "../../prisma/client.ts";
 import { userFields } from "../user-fields.ts";
+import logger from "../logger.ts";
 
 const includeAuthor = { user: { select: userFields } };
 const perPage = 10;
@@ -55,6 +56,10 @@ export const create: RequestHandler = async (req, res) => {
     data: { ...res.locals.body, userId: req.user!.sub },
     include: includeAuthor,
   });
+  logger.info(
+    { announcementId: announcement.id, userId: req.user!.sub },
+    "Оголошення створено",
+  );
   res.status(201).json(announcement);
 };
 

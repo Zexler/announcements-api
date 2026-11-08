@@ -6,7 +6,12 @@ import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { once } from "node:events";
 import type { Server } from "node:http";
-import { after, before, test } from "node:test";
+import {
+  afterAll as after,
+  beforeAll as before,
+  beforeEach,
+  test,
+} from "vitest";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
@@ -18,11 +23,90 @@ databaseUrl.searchParams.set("schema", schema);
 databaseUrl.searchParams.set("application_name", schema);
 process.env.DATABASE_URL = databaseUrl.href;
 process.env.JWT_SECRET = randomUUID() + randomUUID();
+process.env.ALLOWED_ORIGINS = "https://allowed.example";
+process.env.LOG_LEVEL = "silent";
 
 const { default: prisma } = await import("../prisma/client.ts");
 const { default: app } = await import("../src/app.ts");
+const { authLimiter } = await import("../src/middleware/auth-limiter.ts");
+beforeEach(() => authLimiter.resetKey("127.0.0.1"));
 let server: Server;
 let baseUrl: string;
+
+test("Helmet захищає відповіді API та документації", async () => {
+  for (const path of ["/announcements", "/api-docs/", "/missing"]) {
+    const response = await fetch(baseUrl + path);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(response.headers.get("x-frame-options"), "SAMEORIGIN");
+    assert.ok(response.headers.get("content-security-policy"));
+    assert.equal(response.headers.get("x-powered-by"), null);
+  }
+});
+
+test("CORS дозволяє визначені origins і відхиляє сторонні", async () => {
+  const allowed = await fetch(baseUrl + "/announcements", {
+    headers: { Origin: "https://allowed.example" },
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal(
+    allowed.headers.get("access-control-allow-origin"),
+    "https://allowed.example",
+  );
+  const denied = await fetch(baseUrl + "/announcements", {
+    headers: { Origin: "https://other.example" },
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.headers.get("access-control-allow-origin"), null);
+  const preflight = await fetch(baseUrl + "/auth/login", {
+    method: "OPTIONS",
+    headers: {
+      Origin: "https://allowed.example",
+      "Access-Control-Request-Method": "POST",
+    },
+  });
+  assert.equal(preflight.status, 204);
+});
+
+test("auth обмежено десятьма запитами, список залишається доступним", async () => {
+  for (let i = 0; i < 10; i++) {
+    const response = await fetch(baseUrl + "/auth/me");
+    assert.equal(response.status, 401);
+  }
+  for (const path of ["/auth/me", "/auth/login"]) {
+    const response = await fetch(baseUrl + path, {
+      method: path.endsWith("login") ? "POST" : "GET",
+    });
+    assert.equal(response.status, 429);
+    assert.deepEqual(await response.json(), {
+      error: "Too many requests, please try again later",
+    });
+    const retryAfter = Number(response.headers.get("retry-after"));
+    assert.ok(retryAfter > 0 && retryAfter <= 900);
+  }
+  assert.equal((await fetch(baseUrl + "/announcements")).status, 200);
+});
+
+test("логер приховує токен та cookies", () => {
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--eval",
+      `
+    const {default: logger} = await import('./src/logger.ts');
+    logger.info({req:{headers:{authorization:'secret-token',cookie:'secret-cookie'}},res:{headers:{'set-cookie':'secret-session'}}}, 'test');
+  `,
+    ],
+    { env: { ...process.env, LOG_LEVEL: "info" }, encoding: "utf8" },
+  );
+  assert.equal(child.status, 0);
+  assert.doesNotMatch(
+    child.stdout,
+    /secret-token|secret-cookie|secret-session/,
+  );
+  assert.match(child.stdout, /Redacted/);
+});
 
 test("без власного JWT_SECRET застосунок не запускається", () => {
   assert.match(readFileSync(".env.example", "utf8"), /^JWT_SECRET=\s*$/m);
@@ -69,6 +153,8 @@ async function request(
   body?: unknown,
   token?: string,
 ) {
+  // Ліміт перевіряється окремим тестом через прямі HTTP-запити.
+  if (path.startsWith("/auth/")) authLimiter.resetKey("127.0.0.1");
   const response = await fetch(baseUrl + path, {
     method,
     headers: {

@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import prisma from "../../prisma/client.ts";
 import { createTokens, verifyToken } from "../tokens.ts";
 import { userFields } from "../user-fields.ts";
+import logger from "../logger.ts";
 
 export const register: RequestHandler = async (_req, res) => {
   const { username, email, password, name } = res.locals.body;
@@ -25,6 +26,7 @@ export const register: RequestHandler = async (_req, res) => {
     });
     return { user, ...tokens };
   });
+  logger.info({ userId: result.user.id }, "Користувача зареєстровано");
   res.status(201).json(result);
 };
 
@@ -41,6 +43,7 @@ export const login: RequestHandler = async (_req, res) => {
     create: { userId: user.id, token: tokens.refreshToken },
     update: { token: tokens.refreshToken },
   });
+  logger.info({ userId: user.id }, "Користувач увійшов");
   res.json({
     user: {
       id: user.id,

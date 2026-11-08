@@ -66,6 +66,10 @@ function json(description: string, schema: z.ZodType) {
   return { description, content: { "application/json": { schema } } };
 }
 const badRequest = json("Помилка валідації", validationError);
+const tooManyRequests = json(
+  "Перевищено ліміт 10 auth-запитів за 15 хвилин",
+  error,
+);
 const unauthorized = json(
   "Відсутній, прострочений або невалідний токен",
   error,
@@ -101,6 +105,7 @@ registry.registerPath({
   },
   responses: {
     201: json("Користувача створено", session),
+    429: tooManyRequests,
     400: badRequest,
     409: json("Username або email уже зайняті", error),
   },
@@ -118,6 +123,7 @@ registry.registerPath({
   },
   responses: {
     200: json("Вхід виконано", session),
+    429: tooManyRequests,
     400: badRequest,
     401: json("Невірний username або пароль", error),
   },
@@ -137,6 +143,7 @@ registry.registerPath({
   },
   responses: {
     200: json("Токени оновлено", tokens),
+    429: tooManyRequests,
     400: badRequest,
     401: unauthorized,
   },
@@ -149,7 +156,11 @@ registry.registerPath({
   security,
   description:
     "Видаляє refresh token. Access token залишається чинним до завершення його терміну дії.",
-  responses: { 204: { description: "Вихід виконано" }, 401: unauthorized },
+  responses: {
+    204: { description: "Вихід виконано" },
+    401: unauthorized,
+    429: tooManyRequests,
+  },
 });
 registry.registerPath({
   method: "get",
@@ -157,7 +168,11 @@ registry.registerPath({
   tags: ["Автентифікація"],
   summary: "Поточний користувач",
   security,
-  responses: { 200: json("Профіль користувача", profile), 401: unauthorized },
+  responses: {
+    200: json("Профіль користувача", profile),
+    401: unauthorized,
+    429: tooManyRequests,
+  },
 });
 registry.registerPath({
   method: "get",
