@@ -61,7 +61,7 @@ curl -X POST http://localhost:3000/auth/register -H "Content-Type: application/j
 Для створення передайте `title` (5–50 символів), `description` (від 10 символів), `price` (число більше нуля) та `category` (`sale`, `service`, `job`, `other`). Автор визначається за токеном. PATCH приймає хоча б одне з цих полів. Спроба змінити або видалити чуже оголошення повертає `403`, відсутнє оголошення — `404`.
 
 ```sh
-curl "http://localhost:3000/announcements?search=велосипед&sort=oldest&page=1"
+curl -G --data-urlencode "search=велосипед" --data "sort=oldest" --data "page=1" http://localhost:3000/announcements
 ```
 
 ```sh
